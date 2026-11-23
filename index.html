@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OtoHearSay</title>
+<meta name="description" content="Live captions of nearby speech, type to talk, and read text aloud. Private, on your device.">
+<meta name="theme-color" content="#0f2238">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css?v=1.4.0">
+</head>
+<body>
+<div id="flash" aria-hidden="true"></div>
+
+<header class="top">
+  <img src="icons/icon.svg" alt="" class="logo">
+  <h1 id="title">Talk</h1>
+  <span id="engine" class="pill" hidden></span>
+</header>
+
+<main id="view" tabindex="-1"></main>
+
+<nav class="tabs" aria-label="Sections">
+  <button data-go="talk" aria-label="Talk"><svg viewBox="0 0 24 24"><path d="M4 5h16v10H9l-5 4z"/></svg><span>Talk</span></button>
+  <button data-go="phrases" aria-label="Phrases"><svg viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span>Phrases</span></button>
+  <button data-go="read" aria-label="Read aloud"><svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9zM16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg><span>Read</span></button>
+  <button data-go="history" aria-label="Saved talks"><svg viewBox="0 0 24 24"><path d="M12 7v5l3 2M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/></svg><span>Saved</span></button>
+  <button data-go="more" aria-label="More"><svg viewBox="0 0 24 24"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg><span>More</span></button>
+</nav>
+
+<div id="card" class="card-overlay" hidden>
+  <div id="cardText" class="card-text"></div>
+  <div class="card-bar">
+    <button id="cardFlip" class="btn">Flip</button>
+    <button id="cardClose" class="btn primary">Close</button>
+  </div>
+</div>
+
+<script src="app.js?v=1.4.0"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+sherpa-onnx v2.0.2 (Apache-2.0) WebAssembly, emsdk 4.0.23, built 2026-11-20 by .github/workflows/web-engine.yml
+Speech recognition and punctuation; text-to-speech OFF (no eSpeak NG). No model inside.
+ce92ee9f1548dbb1f0d41044f8ae91566610cbde1c01e954e975502068df54b7  sherpa-onnx-asr.js
+d923797a6b70e1b185b80aa30a933582cd7e0d203bd66b7ac59341fbf80b6f57  sherpa-onnx-wasm-main-asr.js
+abac562e1005e6936bdd8dd52dff267fdbfeb4ea210c02a1b57ed2889eac6dce  sherpa-onnx-wasm-main-asr.wasm
