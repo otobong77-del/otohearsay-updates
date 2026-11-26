@@ -1,6 +1,6 @@
 // Keeps the web and desktop app working offline. The cache name carries the version, so a new version replaces it.
-const CACHE = "otohearsay-1.5.0";
-const FILES = ["./", "index.html", "styles.css?v=1.5.0", "app.js?v=1.5.0", "sync.js?v=1.5.0", "manifest.webmanifest",
+const CACHE = "otohearsay-1.5.1";
+const FILES = ["./", "index.html", "styles.css?v=1.5.1", "app.js?v=1.5.1", "sync.js?v=1.5.1", "manifest.webmanifest",
   "icons/icon.svg", "icons/icon-192.png", "icons/icon-512.png", "icons/favicon-32.png"];
 self.addEventListener("install", e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())));
 self.addEventListener("activate", e => e.waitUntil(caches.keys().then(keys =>

@@ -1,7 +1,7 @@
 "use strict";
 // OtoHearSay: one page for phone, tablet (inside the Android app), web and desktop.
 // On Android the page talks to Kotlin through window.OtoNative; in a browser it uses the browser's own speech features.
-const APP_VERSION = "1.5.0";
+const APP_VERSION = "1.5.1";
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -1431,6 +1431,8 @@ function renderMore(sub) {
     return;
   }
   if (sub === "sync") {
+    // sync.js loads after this file: opening the app straight on this screen waits for it
+    if (typeof Sync === "undefined") { view().innerHTML = back; setTimeout(() => renderMore("sync"), 0); return; }
     const on = Sync.on();
     view().innerHTML = back + `
       <h2>Sync across devices</h2>
@@ -1525,7 +1527,7 @@ function renderMore(sub) {
       <li><button class="link grow" data-sub="card"><b>My info card</b><br><span class="muted small">Your name, a message, and an emergency contact in big letters</span></button></li>
       <li><button class="link grow" data-sub="practice"><b>Listening practice</b><br><span class="muted small">Hear a word, pick what you heard; words you miss come back more often</span></button></li>
       <li><button class="link grow" data-sub="remote"><b>Remote microphone</b><br><span class="muted small">Use a second phone or tablet near the speaker, over Wi-Fi</span></button></li>
-      <li><button class="link grow" data-sub="sync"><b>🔄 Sync across devices</b><br><span class="muted small">${Sync.on() ? "On: your phones, the web and the computer share the same data" : "Keep phones, web and computer the same through your Google Drive"}</span></button></li>
+      <li><button class="link grow" data-sub="sync"><b>🔄 Sync across devices</b><br><span class="muted small">${typeof Sync !== "undefined" && Sync.on() ? "On: your phones, the web and the computer share the same data" : "Keep phones, web and computer the same through your Google Drive"}</span></button></li>
       <li><button class="link grow" data-sub="backup"><b>Backup and restore</b><br><span class="muted small">Save everything to Google Drive, OneDrive or a file, and bring it back on a new phone</span></button></li>
       <li><button class="link grow" data-sub="calls"><b>Captions on phone calls</b><br><span class="muted small">Turn on your phone's free call captions</span></button></li>
       <li><button class="link grow" data-sub="about"><b>About and credits</b></button></li>
