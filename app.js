@@ -1,7 +1,7 @@
 "use strict";
 // OtoHearSay: one page for phone, tablet (inside the Android app), web and desktop.
 // On Android the page talks to Kotlin through window.OtoNative; in a browser it uses the browser's own speech features.
-const APP_VERSION = "1.4.1";
+const APP_VERSION = "1.5.0";
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -10,8 +10,14 @@ const fmtDate = t => new Date(t).toLocaleString([], { month: "short", day: "nume
 // ---------- saved data (kept on this device only) ----------
 const store = {
   get(key, fallback) { try { const v = localStorage.getItem("ohs." + key); return v ? JSON.parse(v) : fallback; } catch { return fallback; } },
-  set(key, value) { try { localStorage.setItem("ohs." + key, JSON.stringify(value)); return true; } catch { toast("This device is out of space for saved talks."); return false; } },
+  set(key, value) {
+    try { localStorage.setItem("ohs." + key, JSON.stringify(value)); } catch { toast("This device is out of space for saved talks."); return false; }
+    if (typeof Sync !== "undefined") Sync.changed(key); // Google Drive sync (sync.js) dates the change and sends it soon
+    return true;
+  },
 };
+// this device's own name for itself in synced data (the listening diary counts each device's minutes separately)
+const deviceId = store.get("deviceId", "") || (() => { const id = "d" + Math.random().toString(36).slice(2, 10); store.set("deviceId", id); return id; })();
 const DEFAULT_SETTINGS = { capSize: 30, lineGap: 1.3, theme: "dark", rate: 1, lang: navigator.language || "en-US", name: "", keywords: [],
   keepDays: 0, pauseMs: 400, pron: [], screenOn: true, words: "", unsure: "normal", engine: "private",
   speedUp: false, skip: { brackets: false, links: true, notes: true }, keepSound: false, notifyCaptions: true, voiceFix: false, boost: null, places: {}, alerts: null, alertClose: true };
@@ -127,8 +133,8 @@ const noWordMarks = new Set(); // speech ids whose text was changed by a pronunc
 // ---------- events from Android (and from the browser adapters below) ----------
 const OtoEvents = {
   handlers: {},
-  on(name, fn) { (this.handlers[name] ||= []).push(fn); },
-  emit(name, payload) { (this.handlers[name] || []).forEach(fn => { try { fn(payload); } catch (e) { console.error(e); } }); },
+  on(name, fn) { (this.handlers[name] ||= []).push(fn); return () => { const h = this.handlers[name], i = h.indexOf(fn); if (i >= 0) h.splice(i, 1); }; },
+  emit(name, payload) { [...(this.handlers[name] || [])].forEach(fn => { try { fn(payload); } catch (e) { console.error(e); } }); },
 };
 window.OtoEvents = OtoEvents;
 const native = window.OtoNative || null;
@@ -830,7 +836,7 @@ function renderTalk() {
   view().innerHTML = `
     <div class="captions" id="caps" aria-live="polite">
       ${s && s.lines.length ? "" : `<p class="empty">Tap <b>Listen</b> and what people say appears here in big letters. Type below and tap <b>Speak</b> to answer out loud. Captions can contain mistakes.</p>`}
-      ${!s && !sessions.length && !store.get("welcomed", false) ? `<div class="box" id="welcome" style="font-size:1rem"><b>Welcome to OtoHearSay.</b> <a href="#more/manual">Read how to use it</a>. New phone? <button class="btn" id="wRestore">Restore from a backup</button> <button class="btn" id="wFresh">Start fresh</button></div>` : ""}
+      ${!s && !sessions.length && !store.get("welcomed", false) ? `<div class="box" id="welcome" style="font-size:1rem"><b>Welcome to OtoHearSay.</b> <a href="#more/manual">Read how to use it</a>. New phone? <button class="btn primary" id="wSync">Sync with Google Drive</button> <button class="btn" id="wRestore">Restore from a backup</button> <button class="btn" id="wFresh">Start fresh</button></div>` : ""}
       ${canResume ? `<p id="resume"><button class="btn" id="resumeBtn">Continue your last talk (${esc(fmtDate(last.lines.at(-1)?.t || last.started))})</button></p>` : ""}
       <p class="line partial" id="partial" hidden></p>
     </div>
@@ -870,6 +876,7 @@ function renderTalk() {
   if (canResume) $("#resumeBtn").onclick = () => { current = last; renderTalk(); };
   if ($("#welcome")) {
     $("#wRestore").onclick = () => Backup.open();
+    $("#wSync").onclick = () => { store.set("welcomed", true); Sync.connect(); };
     $("#wFresh").onclick = () => { store.set("welcomed", true); $("#welcome").remove(); };
   }
   updateListenButton();
@@ -1237,11 +1244,17 @@ function manualSections() {
     ["remote", "Remote microphone", `<p>Put a second phone near the speaker (teacher, pastor, meeting). On that phone: More → Remote microphone → <b>Share captions</b>. On your phone, tablet or computer on the same Wi-Fi, open the address it shows and type the 4-digit code. Nothing goes over the internet.</p>`],
     ["look", "Look and comfort", `<p>More → Settings → <b>Look</b>: Dark blue, Light, Sunrise, Ocean, Violet night, System colors (your phone's own colors) and High contrast (yellow on black). Caption size, line spacing and voice speed are there too.</p>`],
     ["practice", "Listening practice", `<p>More → Listening practice: the phone says a word or sentence through its speaker, your headphones or any Bluetooth listening device you use. Pick what you heard. Words you miss come back more often.</p>`],
+    ["sync", "Sync across devices (Google Drive)", `<ol><li>More → <b>Sync across devices</b> → <b>Sign in to Google Drive and sync</b>. Pick your Google account and allow OtoHearSay to see the files it makes.</li>
+      <li>Do the same on your other phone, tablet, the web version and the computer, with the <b>same Google account</b>.</li>
+      <li>That is all. Each device syncs when you open it, a little after every change, and every 10 minutes while it is open. <b>Sync now</b> does it at once.</li>
+      <li>Deleting a talk, phrase or alert word on one device deletes it on the others. If two devices change the same thing, the newest change wins; nothing else is overwritten.</li>
+      <li>A talk you are captioning is sent when you tap Stop. Sound boost, places, the speech engine and kept sound stay on each device.</li>
+      <li>To stop: More → Sync across devices → <b>Stop syncing on this device</b>. The data stays on the device and in your Drive (folder <b>OtoHearSay</b>).</li></ol>`],
     ["backup", "Backup and a new phone", `<ol><li>More → Backup and restore → <b>Back up</b>, and save the file to your Google Drive or OneDrive.</li>
       <li>On a new phone or computer, install OtoHearSay${upd ? " (from the same place you got it; your Drive keeps a copy of the app file)" : " from the store"}.</li>
-      <li>On the first start, tap <b>Restore from a backup</b> and pick the file. Talks, phrases, info card and settings come back. Kept sound is not in backups (too big).</li></ol>`],
+      <li>On the first start, tap <b>Sync with Google Drive</b> (if you use sync, everything comes back by itself) or <b>Restore from a backup</b> and pick the file. Talks, phrases, info card and settings come back. Kept sound is not in backups (too big).</li></ol>`],
     ...(upd ? [["updates", "Updates", `<p>This copy updates itself: every few hours (or More → About → <b>Check for updates</b>) it looks for a new version, checks that it really is OtoHearSay signed with the same key, and installs it. The first time, Android asks you to allow OtoHearSay to install apps; tap <b>Allow</b>. It never installs while you are listening.</p>`]] : []),
-    ["privacy", "Privacy", `<p>With the private engine, what people say never leaves the device. Talks, phrases, your card and settings are stored only on this device and in backups you choose. The only times sound leaves the device are when you choose an online speech engine.</p>`],
+    ["privacy", "Privacy", `<p>With the private engine, what people say never leaves the device. Talks, phrases, your card and settings are stored only on this device, in backups you choose and, if you turn on Sync across devices, in your own Google Drive. The only times sound leaves the device are when you choose an online speech engine.</p>`],
   ];
 }
 
@@ -1417,6 +1430,28 @@ function renderMore(sub) {
     if ($("#rmSound")) $("#rmSound").onchange = e => { if (e.target.checked) RemoteSound.start(Remote.addr, Remote.code); else RemoteSound.stop(); };
     return;
   }
+  if (sub === "sync") {
+    const on = Sync.on();
+    view().innerHTML = back + `
+      <h2>Sync across devices</h2>
+      <p>Sign in with the same Google account on each phone, tablet, the web version and the computer. Talks, quick phrases,
+        your info card, alert words, settings, the listening diary and practice progress then stay the same everywhere. Add or
+        delete something on one device and the others follow within a minute or so of opening the app.</p>
+      <p class="small" id="syncState">${Sync.statusHtml()}</p>
+      <div class="row" style="margin-bottom:12px">
+        ${on ? `<button class="btn primary" id="syNow">Sync now</button><button class="btn" id="syOff">Stop syncing on this device</button>`
+          : `<button class="btn primary" id="syOn">Sign in to Google Drive and sync</button>`}
+      </div>
+      <p class="muted small">Your data goes only to your own Google Drive, in a folder named <b>OtoHearSay</b> (file OtoHearSay-sync.json).
+        OtoHearSay can see only the files it made there, nothing else in your Drive. Changes on two devices are combined, item by item; the newest change wins.
+        Some settings stay on each device: sound boost and places, the speech engine, keeping sound, and the daily backup. Kept sound of talks is not synced (too big).
+        ${GooglePass.native() ? "" : "In a browser Google's sign-in lasts about an hour; after that the next tap renews it (a Google window may flash)."}</p>`;
+    wireBack();
+    if ($("#syOn")) $("#syOn").onclick = () => Sync.connect();
+    if ($("#syNow")) $("#syNow").onclick = () => Sync.run(true);
+    if ($("#syOff")) $("#syOff").onclick = () => { Sync.disconnect(); renderMore("sync"); };
+    return;
+  }
   if (sub === "backup") {
     const last = Backup.last();
     view().innerHTML = back + `
@@ -1472,6 +1507,8 @@ function renderMore(sub) {
         <li><span class="grow"><b>Edge-Punct-Casing</b> punctuation and capitals model by Frank You. Apache License 2.0.</span></li>
         <li><span class="grow"><b>Audio-tagging Zipformer</b> (sherpa-onnx-zipformer-small-audio-tagging-2024-04-15) by the k2-fsa / icefall project, trained on AudioSet, used for sound alerts in the Android app. Apache License 2.0.</span></li>
         <li><span class="grow"><b>AndroidX WebKit</b> (Android app). Apache License 2.0.</span></li>
+        <li><span class="grow"><b>Google Play services sign-in</b> (Android app, for Sync across devices) and <b>Google ML Kit text recognition</b> (Android app, reading a page from a photo). Google's Android SDK terms.</span></li>
+        <li><span class="grow"><b>Google Identity Services</b> (web version, Google sign-in for Sync across devices), loaded from Google when you sign in. Google's terms.</span></li>
       </ul>
       <p class="muted small" style="margin-top:12px">© 2026 Michael's Crossing LLC.</p>`;
     wireBack();
@@ -1488,6 +1525,7 @@ function renderMore(sub) {
       <li><button class="link grow" data-sub="card"><b>My info card</b><br><span class="muted small">Your name, a message, and an emergency contact in big letters</span></button></li>
       <li><button class="link grow" data-sub="practice"><b>Listening practice</b><br><span class="muted small">Hear a word, pick what you heard; words you miss come back more often</span></button></li>
       <li><button class="link grow" data-sub="remote"><b>Remote microphone</b><br><span class="muted small">Use a second phone or tablet near the speaker, over Wi-Fi</span></button></li>
+      <li><button class="link grow" data-sub="sync"><b>🔄 Sync across devices</b><br><span class="muted small">${Sync.on() ? "On: your phones, the web and the computer share the same data" : "Keep phones, web and computer the same through your Google Drive"}</span></button></li>
       <li><button class="link grow" data-sub="backup"><b>Backup and restore</b><br><span class="muted small">Save everything to Google Drive, OneDrive or a file, and bring it back on a new phone</span></button></li>
       <li><button class="link grow" data-sub="calls"><b>Captions on phone calls</b><br><span class="muted small">Turn on your phone's free call captions</span></button></li>
       <li><button class="link grow" data-sub="about"><b>About and credits</b></button></li>
@@ -1779,7 +1817,7 @@ const Diary = {
     const secs = Math.round((Date.now() - this.since) / 1000); this.since = 0;
     if (secs < 5) return;
     const log = store.get("diary", []), d = this.day();
-    const row = log.find(r => r.d === d && r.p === this.place);
+    const row = log.find(r => r.d === d && r.p === this.place && (!r.dev || r.dev === deviceId)); // rows from other devices come by sync
     if (row) row.s += secs; else log.push({ d, p: this.place, s: secs });
     store.set("diary", log.slice(-800));
   },
