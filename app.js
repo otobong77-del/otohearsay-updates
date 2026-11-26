@@ -1,7 +1,7 @@
 "use strict";
 // OtoHearSay: one page for phone, tablet (inside the Android app), web and desktop.
 // On Android the page talks to Kotlin through window.OtoNative; in a browser it uses the browser's own speech features.
-const APP_VERSION = "1.4.0";
+const APP_VERSION = "1.4.1";
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -14,7 +14,7 @@ const store = {
 };
 const DEFAULT_SETTINGS = { capSize: 30, lineGap: 1.3, theme: "dark", rate: 1, lang: navigator.language || "en-US", name: "", keywords: [],
   keepDays: 0, pauseMs: 400, pron: [], screenOn: true, words: "", unsure: "normal", engine: "private",
-  speedUp: false, skip: { brackets: false, links: true, notes: true }, keepSound: false, notifyCaptions: true, voiceFix: false, boost: null, places: {}, alerts: null };
+  speedUp: false, skip: { brackets: false, links: true, notes: true }, keepSound: false, notifyCaptions: true, voiceFix: false, boost: null, places: {}, alerts: null, alertClose: true };
 const UNSURE = { off: 0, normal: 0.3, more: 0.4 };
 const DEFAULT_PHRASES = [
   { name: "Quick", items: ["Please speak slower.", "Can you write that down?", "Please face me when you talk.", "I'm deaf. I read what you say on my phone.", "Yes", "No", "Thank you!", "One moment, please."] },
@@ -44,8 +44,8 @@ function applySettings() {
   if (native && native.setNotifyCaptions) try { native.setNotifyCaptions(settings.notifyCaptions !== false); } catch { }
   if (native && native.setEngine) try { native.setEngine(settings.engine || "private"); } catch { }
   if (native && native.setScreenOn) try { native.setScreenOn(settings.screenOn !== false); } catch { }
-  if (native && native.setWordList) try { native.setWordList(settings.words || ""); native.setUnsureLevel(UNSURE[settings.unsure] ?? 0.3); } catch { }
-  if (typeof WebEngine !== "undefined" && WebEngine.worker) WebEngine.worker.postMessage({ type: "words", words: settings.words || "", unsure: UNSURE[settings.unsure] ?? 0.3 });
+  if (native && native.setWordList) try { native.setWordList(engineWords()); native.setUnsureLevel(UNSURE[settings.unsure] ?? 0.3); } catch { }
+  if (typeof WebEngine !== "undefined" && WebEngine.worker) WebEngine.worker.postMessage({ type: "words", words: engineWords(), unsure: UNSURE[settings.unsure] ?? 0.3 });
   if (typeof Boost !== "undefined") Boost.push();
   if (typeof SoundAlerts !== "undefined") SoundAlerts.push();
 }
@@ -149,12 +149,17 @@ const Voice = {
       const len = e.charLength || (text.slice(e.charIndex).match(/^\S+/) || [""])[0].length;
       OtoEvents.emit("word", { id, start: e.charIndex, end: e.charIndex + len });
     };
-    u.onend = u.onerror = () => OtoEvents.emit("speakDone", id);
+    u.onend = u.onerror = () => { if (this.speaking === id) { this.speaking = null; this.holdUntil = Date.now() + 400; } OtoEvents.emit("speakDone", id); };
     speechSynthesis.cancel();
+    this.speaking = id; // captions pause while the device speaks (same as the Android app's CaptionEngine.speakingId)
     speechSynthesis.speak(u);
     return id;
   },
-  stop() { if (native) native.stopSpeaking(); else if ("speechSynthesis" in window) speechSynthesis.cancel(); },
+  stop() { this.speaking = null; if (native) native.stopSpeaking(); else if ("speechSynthesis" in window) speechSynthesis.cancel(); },
+  // While the reply is spoken (and 0.4 s after), the private engine gets no sound: the device's own voice is not
+  // captioned and does not compete with the engine for the processor (26 Nov phone test: choppy reply while listening).
+  speaking: null, holdUntil: 0,
+  holding() { return !!this.speaking || Date.now() < this.holdUntil; },
 };
 
 // ---------- listening: a private on-device engine (sherpa-onnx) on Android and in browsers; the browser's own
@@ -179,7 +184,7 @@ const WebEngine = {
       else if (m.type === "fileError") OtoEvents.emit("fileError", m.code);
     };
     w.onerror = e => { e.preventDefault(); this.fail("engine-load"); };
-    w.postMessage({ type: "words", words: settings.words || "", unsure: UNSURE[settings.unsure] ?? 0.3 });
+    w.postMessage({ type: "words", words: engineWords(), unsure: UNSURE[settings.unsure] ?? 0.3 });
     return this.worker = w;
   },
   fail(code) {
@@ -202,7 +207,7 @@ const WebEngine = {
     const src = this.ctx.createMediaStreamSource(this.mic);
     const send = samples => {
       Listener.level(samples);
-      if (this.ready && this.worker) this.worker.postMessage({ type: "audio", samples, rate: this.ctx.sampleRate }, [samples.buffer]);
+      if (this.ready && this.worker && !Voice.holding()) this.worker.postMessage({ type: "audio", samples, rate: this.ctx.sampleRate }, [samples.buffer]);
     };
     // ScriptProcessor is old but works in every browser and needs no extra file; 4096 samples is about a tenth of a second
     const node = this.ctx.createScriptProcessor(4096, 1, 1);
@@ -280,6 +285,7 @@ const Listener = {
   },
   stop() {
     TalkSound.end();
+    stoppedAt = Date.now(); hideToast("micQuiet"); // the phone stops a moment later; its silence is not a quiet mic
     if (native) { native.stopListening(); return; }
     this.on = false;
     if (this.mode === "engine") WebEngine.stop();
@@ -344,7 +350,10 @@ OtoEvents.on("autoListen", () => {
   if ((location.hash.slice(1) || "talk").split("/")[0] !== "talk") location.hash = "talk";
   setTimeout(() => { if (!listening && Listener.available()) Listener.start(); }, 300);
 });
-OtoEvents.on("listenState", on => { listening = !!on; updateListenButton(); if (!on) setPartial(""); });
+OtoEvents.on("listenState", on => {
+  listening = !!on; updateListenButton();
+  if (!on) { setPartial(""); stoppedAt = Date.now(); hideToast("micQuiet"); }
+});
 OtoEvents.on("listenError", code => {
   listening = false; updateListenButton();
   toast({
@@ -357,7 +366,15 @@ OtoEvents.on("listenError", code => {
   }[code] || "Listening stopped.");
 });
 OtoEvents.on("partial", text => { if (text) TalkSound.heard(); setPartial(text); });
-OtoEvents.on("micQuiet", () => toast("The microphone hears almost nothing. Move the phone closer to the person talking, or check that nothing covers the microphone."));
+// Shown only while listening on the Talk tab (26 Nov phone test: it popped up right after Stop and stayed over Saved
+// talks). The silence after Stop never counts, and the warning goes away on Stop and when the tab changes.
+let stoppedAt = 0;
+OtoEvents.on("micQuiet", () => {
+  if (!listening || Date.now() - stoppedAt < 3000) return;
+  if ((location.hash.slice(1) || "talk").split("/")[0] !== "talk") return;
+  toast("The microphone hears almost nothing. Move the phone closer to the person talking, or check that nothing covers the microphone.", "micQuiet");
+});
+window.addEventListener("hashchange", () => hideToast("micQuiet"));
 OtoEvents.on("engineProgress", pct => {
   const e = $("#engine"); if (!e) return;
   e.textContent = pct == null ? Listener.name() : `Getting the private speech engine ready (one time, 79 MB): ${pct}%`;
@@ -399,9 +416,53 @@ const speakerName = (s, n) => (s && s.names && s.names[n]) || "Speaker " + n;
 function alertWords() {
   return [settings.name, ...settings.keywords].map(w => (w || "").trim()).filter(Boolean);
 }
-function wordRegex(words) {
-  const safe = words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  return safe.length ? new RegExp("\\b(" + safe.join("|") + ")\\b", "gi") : null;
+// The speech engines get the personal word list plus the alert name and alert words as "hot words", so a name the
+// engine does not know (Otobong was written "O tobon" in the 26 Nov phone test) is heard right more often.
+function engineWords() {
+  const listed = (settings.words || "").split(/[,\n]/).map(w => w.trim()).filter(Boolean);
+  const seen = new Set(listed.map(w => w.toLowerCase()));
+  for (const w of alertWords()) if (!seen.has(w.toLowerCase())) { seen.add(w.toLowerCase()); listed.push(w); }
+  return listed.join("\n");
+}
+const plainWord = w => (w || "").toLowerCase().normalize("NFD").replace(/[^a-z0-9]/g, "");
+// How many letters may differ for a word to still count as the alert word: none for short words (so "Ann" never fires
+// on "and"), one for 5 to 7 letters, two for longer ones.
+function closeEnough(a, b) {
+  const max = b.length < 5 ? 0 : b.length < 8 ? 1 : 2;
+  if (Math.abs(a.length - b.length) > max) return false;
+  if (!max) return a === b;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length] <= max;
+}
+// Which words of a caption match an alert word, as word positions (counting the non-space pieces). A word the engine
+// split in two ("O tobon") is joined back, and with "Close spellings count" on (the default) a small spelling
+// difference still counts ("Catherine" for Katherine). Returns an empty set when nothing matches.
+function alertHits(text, words = alertWords()) {
+  const hits = new Set();
+  if (!words.length || !text) return hits;
+  const plain = text.split(/\s+/).filter(Boolean).map(p => plainWord(p.replace(/'s\W*$/i, "")));
+  const fuzzy = settings.alertClose !== false;
+  for (const w of words) {
+    const target = plainWord(w);
+    if (!target) continue;
+    const span = w.trim().split(/\s+/).length; // an alert of two words may be heard as two to four pieces
+    for (let i = 0; i < plain.length; i++) {
+      if (!plain[i]) continue;
+      let joined = "";
+      for (let k = 0; k < span + 2 && i + k < plain.length; k++) {
+        joined += plain[i + k];
+        if (k + 1 < span) continue;
+        if (joined === target || (fuzzy && closeEnough(joined, target))) { for (let x = 0; x <= k; x++) hits.add(i + x); break; }
+        if (!fuzzy || joined.length > target.length + 2) break;
+      }
+    }
+  }
+  return hits;
 }
 function addLine(who, text, unsure) {
   const s = ensureSession();
@@ -414,8 +475,7 @@ function addLine(who, text, unsure) {
   s.lines.push(line);
   saveSessions();
   if (who === "them") {
-    const re = wordRegex(alertWords());
-    if (re && re.test(text)) alertUser();
+    if (alertHits(text).size) alertUser();
   }
   const caps = $("#caps");
   if (caps) { $(".empty", caps)?.remove(); $("#resume")?.remove(); caps.insertBefore(lineEl(line, s), $("#partial")); scrollCaps(); }
@@ -430,7 +490,7 @@ function lineEl(line, s) {
     p.innerHTML = `<button class="spk" data-spk="${line.spk || 2}" title="Tap to name this speaker">${esc(speakerName(s, line.spk || 2))}</button>`;
     return p;
   }
-  const re = line.who === "them" ? wordRegex(alertWords()) : null;
+  const hits = line.who === "them" ? alertHits(line.text) : new Set();
   // words the engine was unsure of get a dotted underline, so a wrong guess is not taken at face value
   const unsure = new Set(line.unsure || []);
   let i = -1;
@@ -438,7 +498,7 @@ function lineEl(line, s) {
     if (!part.trim()) return part;
     i++;
     let h = esc(part);
-    if (re) { re.lastIndex = 0; h = h.replace(re, "<mark>$1</mark>"); }
+    if (hits.has(i)) h = `<mark>${h}</mark>`;
     return unsure.has(i) ? `<span class="unsure" title="The app is not sure of this word">${h}</span>` : h;
   }).join("");
   return p;
@@ -700,11 +760,17 @@ function sayAloud(text) {
 
 // ---------- small helpers ----------
 let toastTimer = 0;
-function toast(msg) {
+// kind names a message that belongs to one moment (the low-microphone warning belongs to listening), so it can be
+// taken away when that moment ends: hideToast("micQuiet") on Stop and on a tab change.
+function hideToast(kind) {
+  const t = $("#toast");
+  if (t && !t.hidden && (!kind || t.dataset.kind === kind)) { t.hidden = true; clearTimeout(toastTimer); }
+}
+function toast(msg, kind = "") {
   let t = $("#toast");
   if (!t) { t = document.createElement("div"); t.id = "toast"; t.setAttribute("role", "status"); document.body.appendChild(t);
     Object.assign(t.style, { position: "fixed", left: "50%", bottom: "92px", transform: "translateX(-50%)", maxWidth: "min(92vw, 520px)", background: "var(--panel2)", color: "var(--fg)", border: "1px solid var(--line)", borderRadius: "12px", padding: "12px 16px", zIndex: 70, boxShadow: "0 6px 24px rgba(0,0,0,.35)" }); }
-  t.textContent = msg; t.hidden = false;
+  t.textContent = msg; t.hidden = false; t.dataset.kind = kind;
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 4500);
 }
 function showCard(text) {
@@ -1144,14 +1210,15 @@ function manualSections() {
       <li><b>Fix by voice:</b> turn it on in Settings, then say "replace <i>wrong word</i> with <i>right word</i>" to fix the last line.</li>
       <li><b>Fix a word everywhere:</b> in a saved talk, use the box "Fix a word everywhere in this talk".</li>
       <li>When you type a new name in a fix, the app offers to add it to your word list so it gets it right next time.</li></ul>`],
-    ["reply", "Answering out loud", `<ul><li>Type in the box at the bottom of Talk and tap <b>Speak</b>: the phone says it out loud.</li>
+    ["reply", "Answering out loud", `<ul><li>Type in the box at the bottom of Talk and tap <b>Speak</b>: the phone says it out loud. While it speaks, captions pause for a moment, so the phone's own voice is not written down as the other person's words and plays smoothly; they carry on by themselves when it finishes. While the keyboard is open, the captions and the top bar move up above it and stay below the clock, so you can keep reading while you type.</li>
       <li>Tap a ready-made phrase (the round buttons above the box), or open the <b>Phrases</b> tab for more. Pin your favorites with ★ in Phrases (Edit).</li>
       <li><b>🪧 Show</b> puts your typed words in giant letters; <b>⇅ Flip</b> turns them around for the person across from you.</li></ul>`],
     ["tools", "The Talk tools", `<ul><li><b>🗣 New speaker:</b> marks that a different person started talking. Tap the speaker label to give them a name.</li>
       <li><b>A− / A+:</b> smaller or bigger captions (also in Settings).</li>
       <li><b>🔖 Mark:</b> bookmarks this moment (class, church, meetings).</li>
       <li><b>↓ Newest:</b> appears when you scroll back to re-read; tap it to jump to the latest words.</li>
-      <li>Your name and alert words (Settings) make the phone buzz and flash when someone says them.</li></ul>`],
+      <li>Your name and alert words (Settings) make the phone buzz and flash when someone says them. The app also gives them to the speech engine so it hears them right more often, and with <b>Close spellings count</b> (on unless you turn it off) it still alerts when the captions spell the name a little differently or split it in two, for example "O tobon" for Otobong or "Catherine" for Katherine. Short words of four letters or fewer must match exactly. If it alerts too often, turn <b>Close spellings count</b> off in Settings.</li>
+      <li><b>"The microphone hears almost nothing":</b> shows only while Listen is on, after about 8 seconds of near silence. Move the phone closer to the person talking. It goes away when you tap Stop or open another tab.</li></ul>`],
     ...(phone ? [["quick", "Start captions in one tap", `<ul><li><b>Home-screen widget:</b> touch and hold an empty spot on your home screen → Widgets → OtoHearSay → "Start captions".</li>
       <li><b>Quick-settings button:</b> swipe down twice from the top of the screen → tap the pencil (Edit) → drag <b>Captions</b> into your buttons.</li>
       <li><b>App icon:</b> touch and hold the OtoHearSay icon → <b>Start captions</b>.</li>
@@ -1209,6 +1276,7 @@ function renderMore(sub) {
       <label class="field"><span>Mark words the app is unsure of (dotted underline)</span><select id="unsure"><option value="off">Off</option><option value="normal">Normal</option><option value="more">More words</option></select></label>
       <label class="field"><span>Your name (the phone buzzes and flashes when someone says it)</span><input type="text" id="nm" value="${esc(settings.name)}"></label>
       <label class="field"><span>Other alert words, separated by commas (for example: boarding, next, a child's name)</span><input type="text" id="kw" value="${esc(settings.keywords.join(", "))}"></label>
+      <label class="row" style="margin-bottom:12px"><input type="checkbox" id="alertClose" ${settings.alertClose !== false ? "checked" : ""} style="width:auto;min-height:auto"> Close spellings count: alert even when the captions spell the name a little differently or split it in two (for example "O tobon" for Otobong). Your name and alert words are also given to the speech engine, so it hears them right more often.</label>
       ${native ? `<label class="row" style="margin-bottom:12px"><input type="checkbox" id="scrOn" ${settings.screenOn !== false ? "checked" : ""} style="width:auto;min-height:auto"> Keep the screen on while listening (when off, captions keep running with the screen off and a notification shows)</label>` : ""}
       <label class="field"><span>Delete saved talks automatically after</span><select id="keep"><option value="0">Never</option><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option></select></label>
       <div class="box">
@@ -1243,6 +1311,7 @@ function renderMore(sub) {
     $("#unsure").onchange = e => { settings.unsure = e.target.value; saveSettings(); };
     $("#nm").onchange = e => { settings.name = e.target.value.trim(); saveSettings(); };
     $("#kw").onchange = e => { settings.keywords = e.target.value.split(",").map(s => s.trim()).filter(Boolean); saveSettings(); };
+    $("#alertClose").onchange = e => { settings.alertClose = e.target.checked; saveSettings(); };
     $("#test").onclick = () => Voice.speak("Hello! This is how I sound.");
     $("#gap").value = String([1.15, 1.3, 1.6].includes(settings.lineGap) ? settings.lineGap : 1.3);
     $("#gap").onchange = e => { settings.lineGap = +e.target.value; saveSettings(); };
